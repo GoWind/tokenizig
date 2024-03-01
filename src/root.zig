@@ -16,9 +16,16 @@ const Pair = struct {
 // assigne a new token for this pair
 const Vocab = std.AutoArrayHashMap(u32, []const u8);
 
-const PairCount = std.AutoArrayHashMap(Pair, usize);
+// const PairCount = std.AutoArrayHashMap(Pair, usize);
 const PairReplacement = std.AutoArrayHashMap(Pair, u32);
-
+const PairCount = std.ArrayHashMap(Pair, u32, struct {
+    pub fn eql(_: @This(), a: Pair, b: Pair, _: usize) bool {
+        return a.p0 == b.p0 and a.p1 == b.p1;
+    }
+    pub fn hash(_: @This(), a: Pair) u32 {
+        return @as(u32, @truncate(a.p0 * a.p1));
+    }
+}, false);
 // get_stats in minbpe
 fn maxFrequency(p: PairCount) Pair {
     var count: usize = std.math.minInt(usize);
@@ -58,7 +65,7 @@ pub fn countConsecutivePairs(ids: []const u32, counts: *PairCount) !void {
     }
 }
 
-pub fn merge(ids: []const u32, outs: []u32, p1: u32, p2: u32, replacement: u32) usize {
+pub fn merge(ids: []u32, outs: []u32, p1: u32, p2: u32, replacement: u32) usize {
     var i: usize = 0;
     var j: usize = 0;
     while (i < ids.len - 1) {
@@ -117,7 +124,7 @@ pub const Tokenizer = struct {
         }
         // The type of copy depends on vocab size (eg, for a vocab of 32768, it could just be []u16)
         // keeping it []u32 and then optimizing later
-        const copy = try self.allocator.alloc(u32, unicodeStr.bytes.len);
+        var copy = try self.allocator.alloc(u32, unicodeStr.bytes.len);
         for (unicodeStr.bytes, 0..) |byte, idx| {
             copy[idx] = byte;
         }
@@ -129,11 +136,13 @@ pub const Tokenizer = struct {
             // Find pair with max frequency
             const pair = maxFrequency(pairCount);
             const replacementIdx = 256 + @as(u32, @truncate(i));
-            _ = merge(copy, copy, pair.p0, pair.p1, replacementIdx);
+            const afterCopy = merge(copy, copy, pair.p0, pair.p1, replacementIdx);
             try self.merges.put(pair, replacementIdx);
+            std.debug.print("iter {}, merging {} {} -> {}\n", .{ i, pair.p0, pair.p1, replacementIdx });
             const concatenatedValue = try std.mem.concat(self.allocator, u8, &[_][]const u8{ self.vocab.get(pair.p0).?, self.vocab.get(pair.p1).? });
             try self.vocab.put(replacementIdx, concatenatedValue);
-            pairCount.clearRetainingCapacity();
+            _ = pairCount.swapRemove(pair);
+            copy = copy[0..afterCopy];
         }
     }
 
@@ -182,7 +191,7 @@ pub const Tokenizer = struct {
         while (iterator.next()) |iter| {
             const key = iter.key_ptr.*;
             const value = iter.value_ptr.*;
-            std.debug.print("({d}) -> {s}\n", .{ key, value });
+            std.debug.print("({d}) -> {d}\n", .{ key, value });
         }
     }
     pub fn decode(self: Self, tokens: []u32) !unicode.Utf8View {

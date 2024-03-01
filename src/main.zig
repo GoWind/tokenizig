@@ -19,5 +19,5 @@ pub fn main() !void {
     std.debug.print("\n\n Merge \n\n", .{});
     tokenizer.printMerge();
     std.debug.print("\n\n Vocab \n\n", .{});
-    tokenizer.printVocab();
+    // tokenizer.printVocab();
 }
