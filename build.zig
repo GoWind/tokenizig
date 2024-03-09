@@ -1,6 +1,9 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    const jstring_build = @import("jstring");
+    const jstrings = b.dependency("jstring", .{});
+
     const target = b.standardTargetOptions(.{});
 
     const optimize = b.standardOptimizeOption(.{});
@@ -17,7 +20,8 @@ pub fn build(b: *std.Build) void {
     });
 
     exe.root_module.addImport("deps", rootModule);
-
+    exe.root_module.addImport("jstring", jstrings.module("jstring"));
+    jstring_build.linkPCRE(exe, jstrings);
     b.installArtifact(exe);
 
     const runArtifact = b.addRunArtifact(exe);
