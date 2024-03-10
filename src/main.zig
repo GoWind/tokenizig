@@ -27,3 +27,20 @@ pub fn main() !void {
     std.debug.print("\n\n Vocab \n\n", .{});
     // tokenizer.printVocab();
 }
+
+test "gpt4 regex test" {
+    const allocator = std.testing.allocator;
+    var gpt4Pattern = try jstring.RegexUnmanaged.init(allocator, "'(?:[sdmt]|ll|ve|re)|[^\r\n\\p{L}\\p{N}]?+\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]++[\r\n]*|\\s*[\r\n]|\\s+(?!\\S)|\\s+", 0);
+    var gpt2Pattern = try jstring.RegexUnmanaged.init(allocator, "'(?:[sdmt]|ll|ve|re)| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+", 0);
+    defer gpt2Pattern.deinit(allocator);
+    defer gpt4Pattern.deinit(allocator);
+    try gpt4Pattern.matchAll(allocator, "abcdeparallel ४७१", 0, 0);
+    try std.testing.expect(gpt4Pattern.matchSucceed());
+    const matched_results = gpt4Pattern.getResults();
+    try std.testing.expect(matched_results != null);
+
+    var gpt2_matched_results = gpt2Pattern.getResultsIterator("abcdeparallel ४७१");
+    while (gpt2_matched_results.nextResult()) |result| {
+        std.debug.print("{} {} : {s} \n", .{ result.start, result.len, result.value });
+    }
+}
