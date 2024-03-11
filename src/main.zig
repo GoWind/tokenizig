@@ -30,17 +30,13 @@ pub fn main() !void {
 
 test "gpt4 regex test" {
     const allocator = std.testing.allocator;
-    const pattern =
-        \\ "(*UTF)'(?:[sdmt]|ll|ve|re)| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+"
-    ;
-    var gpt2Pattern = try jstring.RegexUnmanaged.init(allocator, pattern, 0);
-    defer gpt2Pattern.deinit(allocator);
-    const utf8String = try unicode.Utf8View.init("abcdeparallel ४७१");
-    //     var gpt2_matched_results = gpt2Pattern.getResultsIterator(utf8String.bytes, );
-
-    var gpt2_matched_results = gpt2Pattern.getResultsIterator(utf8String.bytes);
-    try std.testing.expect(gpt2_matched_results.maybe_matched_results != null);
-    while (gpt2_matched_results.nextResult()) |result| {
-        std.debug.print("{} {} : {u} \n", .{ result.start, result.len, result.value });
+    const pattern = "(*UTF)'(?:[sdmt]|ll|ve|re)| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+/g";
+    var utf8String = try jstring.JString.newFromSlice(allocator, "abcdeparallel ४७१");
+    defer utf8String.deinit();
+    var regex = try utf8String.matchAll(pattern, 0, 0, 0);
+    defer regex.deinit();
+    if (regex.getResults()) |results| {
+        try std.testing.expectEqual(2, results.len);
     }
+    try std.testing.expect(regex.matchSucceed() == true);
 }
