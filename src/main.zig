@@ -31,12 +31,16 @@ pub fn main() !void {
 test "gpt4 regex test" {
     const allocator = std.testing.allocator;
     const pattern = "(*UTF)'(?:[sdmt]|ll|ve|re)| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+/g";
-    var utf8String = try jstring.JString.newFromSlice(allocator, "abcdeparallel ४७१");
+    const slice = "abcdeparallel ४७१";
+    var utf8String = try jstring.JString.newFromSlice(allocator, slice);
     defer utf8String.deinit();
     var regex = try utf8String.matchAll(pattern, 0, 0, 0);
     defer regex.deinit();
     if (regex.getResults()) |results| {
         try std.testing.expectEqual(2, results.len);
+        for (results) |result| {
+            std.debug.print("{s}\n", .{slice[result.start .. result.start + result.len]});
+        }
     }
     try std.testing.expect(regex.matchSucceed() == true);
 }
