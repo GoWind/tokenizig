@@ -39,7 +39,9 @@ test "gpt4 regex test" {
     if (regex.getResults()) |results| {
         try std.testing.expectEqual(2, results.len);
         for (results) |result| {
-            std.debug.print("{s}\n", .{slice[result.start .. result.start + result.len]});
+            var match = try utf8String.slice(@as(isize, @intCast(result.start)), @as(isize, @intCast(result.start + result.len)));
+            defer match.deinit();
+            std.debug.print("{s}\n", .{match});
         }
     }
     try std.testing.expect(regex.matchSucceed() == true);

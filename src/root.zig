@@ -1,12 +1,12 @@
 const std = @import("std");
 const testing = std.testing;
 const unicode = std.unicode;
-const Pair = struct {
+pub const Pair = struct {
     p0: u32,
     p1: u32,
 };
 // assigns a token ID to a bunch of bytes
-// starting with id 0..25 for the first 8bit of values
+// starting with id 0..255 for the first 8bit of values
 // that is id 0 => null byte
 // id 1 => 1
 // id 2 => 2....
@@ -14,11 +14,12 @@ const Pair = struct {
 // we create a new token ID for this pair
 // in the next run we merge these pairs together 'ab x' and then
 // assigne a new token for this pair
-const Vocab = std.AutoArrayHashMap(u32, []const u8);
+pub const Vocab = std.AutoArrayHashMap(u32, []const u8);
+pub const SpecialTokens = std.StringArrayHashMap(u32);
 
 // const PairCount = std.AutoArrayHashMap(Pair, usize);
-const PairReplacement = std.AutoArrayHashMap(Pair, u32);
-const PairCount = std.ArrayHashMap(Pair, u32, struct {
+pub const PairReplacement = std.AutoArrayHashMap(Pair, u32);
+pub const PairCount = std.ArrayHashMap(Pair, u32, struct {
     pub fn eql(_: @This(), a: Pair, b: Pair, _: usize) bool {
         return a.p0 == b.p0 and a.p1 == b.p1;
     }
@@ -27,7 +28,7 @@ const PairCount = std.ArrayHashMap(Pair, u32, struct {
     }
 }, false);
 // get_stats in minbpe
-fn maxFrequency(p: PairCount) Pair {
+pub fn maxFrequency(p: PairCount) Pair {
     var count: usize = std.math.minInt(usize);
     var pairPtr: *Pair = undefined;
     var iterator = p.iterator();
@@ -40,7 +41,7 @@ fn maxFrequency(p: PairCount) Pair {
     return Pair{ .p0 = pairPtr.p0, .p1 = pairPtr.p1 };
 }
 
-fn minFrequency(p: PairCount) Pair {
+pub fn minFrequency(p: PairCount) Pair {
     var count = std.math.maxInt(usize);
     var pairPtr: *Pair = undefined;
     var iterator = p.iterator();
@@ -90,7 +91,6 @@ test "basic add functionality" {
 }
 
 pub const Tokenizer = struct {
-    const SpecialTokens = std.StringArrayHashMap(u32);
     const Self = @This();
 
     allocator: std.mem.Allocator,
@@ -135,11 +135,15 @@ pub const Tokenizer = struct {
             try countConsecutivePairs(copy, &pairCount);
             // Find pair with max frequency
             const pair = maxFrequency(pairCount);
+            // calculate its replacement token
             const replacementIdx = 256 + @as(u32, @truncate(i));
+            // replace pair in our token stream with the replacement token
             const afterCopy = merge(copy, copy, pair.p0, pair.p1, replacementIdx);
+            // store the association of our pair -> its replacement
             try self.merges.put(pair, replacementIdx);
             std.debug.print("iter {}, merging {} {} -> {}\n", .{ i, pair.p0, pair.p1, replacementIdx });
             const concatenatedValue = try std.mem.concat(self.allocator, u8, &[_][]const u8{ self.vocab.get(pair.p0).?, self.vocab.get(pair.p1).? });
+            // the characters represented by this new token
             try self.vocab.put(replacementIdx, concatenatedValue);
             _ = pairCount.swapRemove(pair);
             copy = copy[0..afterCopy];
