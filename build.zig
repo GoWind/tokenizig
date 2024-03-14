@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
+    // import dependencies
     const jstring_build = @import("jstring");
     const jstrings = b.dependency("jstring", .{});
 
@@ -15,11 +16,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const rootModule = b.addModule("root", .{
+    const tokenizers = b.addModule("tokenizers", .{
         .root_source_file = .{ .path = "src/root.zig" },
     });
 
-    exe.root_module.addImport("deps", rootModule);
+    exe.root_module.addImport("tokenizers", tokenizers);
     exe.root_module.addImport("jstring", jstrings.module("jstring"));
     jstring_build.linkPCRE(exe, jstrings);
     b.installArtifact(exe);
@@ -30,8 +31,8 @@ pub fn build(b: *std.Build) void {
 
     runStep.dependOn(&runArtifact.step);
 
-    const exe_test = b.addTest(.{ .root_source_file = .{ .path = "src/main.zig" } });
-    exe_test.root_module.addImport("deps", rootModule);
+    // Setup tests for the app
+    const exe_test = b.addTest(.{ .root_source_file = .{ .path = "src/test.zig" } });
     exe_test.root_module.addImport("jstring", jstrings.module("jstring"));
     jstring_build.linkPCRE(exe_test, jstrings);
     const testStep = b.step("test", "test the app");

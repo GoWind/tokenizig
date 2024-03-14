@@ -1,6 +1,11 @@
+const jstring = @import("jstring");
 const std = @import("std");
-const testing = std.testing;
 const unicode = std.unicode;
+const StringChunks = std.ArrayList([]32);
+const gpt2Pattern = "'(?:[sdmt]|ll|ve|re)| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
+const gpt4Pattern = "'(?i:[sdmt]|ll|ve|re)|[^\r\n\\p{L}\\p{N}]?+\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]++[\r\n]*|\\s*[\r\n]|\\s+(?!\\S)|\\s+";
+const testing = std.testing;
+
 pub const Pair = struct {
     p0: u32,
     p1: u32,
@@ -17,7 +22,7 @@ pub const Pair = struct {
 pub const Vocab = std.AutoArrayHashMap(u32, []const u8);
 pub const SpecialTokens = std.StringArrayHashMap(u32);
 
-// const PairCount = std.AutoArrayHashMap(Pair, usize);
+/// Track the replacement for a given pair of u32 tokens
 pub const PairReplacement = std.AutoArrayHashMap(Pair, u32);
 pub const PairCount = std.ArrayHashMap(Pair, u32, struct {
     pub fn eql(_: @This(), a: Pair, b: Pair, _: usize) bool {
@@ -27,7 +32,8 @@ pub const PairCount = std.ArrayHashMap(Pair, u32, struct {
         return @as(u32, @truncate(a.p0 * a.p1));
     }
 }, false);
-// get_stats in minbpe
+
+/// Return the pair with the highest frequency
 pub fn maxFrequency(p: PairCount) Pair {
     var count: usize = std.math.minInt(usize);
     var pairPtr: *Pair = undefined;
@@ -41,6 +47,7 @@ pub fn maxFrequency(p: PairCount) Pair {
     return Pair{ .p0 = pairPtr.p0, .p1 = pairPtr.p1 };
 }
 
+/// Return the pair with the lowest frequency
 pub fn minFrequency(p: PairCount) Pair {
     var count = std.math.maxInt(usize);
     var pairPtr: *Pair = undefined;
@@ -54,6 +61,7 @@ pub fn minFrequency(p: PairCount) Pair {
     return Pair{ .p0 = pairPtr.p0, .p1 = pairPtr.p1 };
 }
 
+/// Count the frequency of each pair of consecutive tokens
 pub fn countConsecutivePairs(ids: []const u32, counts: *PairCount) !void {
     var i: usize = 0;
     while (i < ids.len - 1) : (i += 1) {
@@ -90,7 +98,7 @@ test "basic add functionality" {
     try testing.expectEqualSlices(u8, &expected, og[0..mergedSize]);
 }
 
-pub const Tokenizer = struct {
+pub const BasicTokenizer = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
@@ -208,3 +216,122 @@ pub const Tokenizer = struct {
         return unicode.Utf8View.init(stringBytes.items);
     }
 };
+
+pub const RegexTokenizer = struct {
+    pattern: []const u8,
+    alloc: std.mem.Allocator,
+    // pattern: []const u8,
+    merges: PairReplacement,
+    special_tokens: SpecialTokens,
+    vocab: Vocab,
+    const Self = @This();
+    pub fn init(alloc: std.mem.Allocator, maybe_pattern: ?[]const u8) !Self {
+        var vocab = Vocab.init(alloc);
+        try Self.buildInitVocab(alloc, &vocab);
+        const pat = if (maybe_pattern) |pattern| pattern else gpt4Pattern;
+        const copy = try alloc.alloc(u8, pat.len);
+        std.mem.copyForwards(u8, copy, pat);
+
+        return Self{
+            .alloc = alloc,
+            .merges = PairReplacement.init(alloc),
+            .pattern = pat,
+            .special_tokens = SpecialTokens.init(alloc),
+            .vocab = vocab,
+        };
+    }
+
+    fn buildInitVocab(alloc: std.mem.Allocator, vocab: *Vocab) !void {
+        var i: u32 = 0;
+        while (i < 256) : (i += 1) {
+            const val = try alloc.alloc(u8, 1);
+            val[0] = @as(u8, @truncate(i));
+            try vocab.put(@as(u32, i), val);
+        }
+    }
+
+    pub fn train(self: *Self, unicodeStr: jstring.JString, vocab: usize) !void {
+        if (vocab < 256) {
+            @panic("vocab must be atleast 256 in size");
+        }
+        var pairCount = PairCount.init(self.alloc);
+        const chunks = StringChunks.init(self.alloc);
+        var matches = unicodeStr.matchAll(self.pattern, 0, 0, 0);
+        std.debug.assert(matches.matchSucceed() == true);
+        const results = matches.getResults().?;
+        for (results) |result| {
+            var chunk = std.ArrayList(u32).init(self.alloc);
+            const start = result.start;
+            var i: usize = 0;
+            // Turn the string into a list of u32
+            while (i < result.len) : (i += 1) {
+                try chunk.append(unicodeStr.charAt(@as(isize, @intCast(start + i))));
+            }
+
+            try chunks.append(try chunk.toOwnedSlice());
+        }
+
+        const numMerges = vocab - 256;
+        var i: usize = 0;
+        while (i < numMerges) : (i += 1) {
+            for (chunks.items) |chunk| {
+                countConsecutivePairs(chunk.items, &pairCount);
+            }
+            const pair = maxFrequency(pairCount);
+            const replacementIdx = 256 + @as(u32, @truncate(i));
+            for (chunks.items) |*chunk| {
+                const reducedSize = merge(chunk.items, chunk.items, pair.p0, pair.p1, replacementIdx);
+                chunk = chunk[0..reducedSize];
+            }
+            std.debug.print("iter {}, merging {} {} -> {}\n", .{ i, pair.p0, pair.p1, replacementIdx });
+            const concatenatedValue = try std.mem.concat(self.allocator, u8, &[_][]const u8{ self.vocab.get(pair.p0).?, self.vocab.get(pair.p1).? });
+            // the characters represented by this new token
+            try self.vocab.put(replacementIdx, concatenatedValue);
+            _ = pairCount.swapRemove(pair);
+        }
+
+        //TODO: How do I dealloc the chunks?
+    }
+
+    pub fn printMerge(self: Self) void {
+        var iterator = self.merges.iterator();
+        while (iterator.next()) |iter| {
+            const key = iter.key_ptr.*;
+            const value = iter.value_ptr.*;
+            std.debug.print("({d}, {d}) -> {d}\n", .{ key.p0, key.p1, value });
+        }
+    }
+};
+
+pub const FileHandle = struct {
+    fd: i32,
+    slice: []u8,
+    const Self = @This();
+    pub fn init(path: []const u8) !Self {
+        const fd = try std.os.open(path, .{ .ACCMODE = .RDONLY }, 0);
+        const stat = try std.os.fstat(fd);
+        const mapping = try std.os.mmap(null, @as(u64, @intCast(stat.size)), std.os.PROT.READ, .{ .TYPE = .PRIVATE }, fd, 0);
+        return Self{
+            .fd = fd,
+            .slice = mapping,
+        };
+    }
+
+    pub fn deinit(self: *Self) void {
+        std.os.munmap(self.slice);
+        std.os.close(self.fd);
+    }
+};
+
+pub fn readFileAsSlice(path: []const u8) !FileHandle {
+    return FileHandle.init(path);
+}
+
+test "test RegexTokenizer" {
+    const testingAllocator = std.testing.allocator;
+    var tokenizer = try RegexTokenizer.init(testingAllocator, null);
+    const fileHandle = try readFileAsSlice("taylorswift.txt");
+    defer fileHandle.deinit();
+    try tokenizer.train(fileHandle.slice, 256);
+    tokenizer.printMerge();
+}
