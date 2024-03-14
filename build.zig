@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     const tokenizers = b.addModule("tokenizers", .{
         .root_source_file = .{ .path = "src/root.zig" },
     });
+    tokenizers.addImport("jstring", jstrings.module("jstring"));
 
     exe.root_module.addImport("tokenizers", tokenizers);
     exe.root_module.addImport("jstring", jstrings.module("jstring"));
@@ -32,7 +33,7 @@ pub fn build(b: *std.Build) void {
     runStep.dependOn(&runArtifact.step);
 
     // Setup tests for the app
-    const exe_test = b.addTest(.{ .root_source_file = .{ .path = "src/test.zig" } });
+    const exe_test = b.addTest(.{ .root_source_file = .{ .path = "src/root.zig" } });
     exe_test.root_module.addImport("jstring", jstrings.module("jstring"));
     jstring_build.linkPCRE(exe_test, jstrings);
     const testStep = b.step("test", "test the app");

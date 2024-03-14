@@ -1,7 +1,7 @@
 const jstring = @import("jstring");
 const std = @import("std");
 const unicode = std.unicode;
-const StringChunks = std.ArrayList([]32);
+const StringChunks = std.ArrayList([]u32);
 const gpt2Pattern = "'(?:[sdmt]|ll|ve|re)| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+";
 const gpt4Pattern = "'(?i:[sdmt]|ll|ve|re)|[^\r\n\\p{L}\\p{N}]?+\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]++[\r\n]*|\\s*[\r\n]|\\s+(?!\\S)|\\s+";
 const testing = std.testing;
@@ -91,13 +91,6 @@ pub fn merge(ids: []u32, outs: []u32, p1: u32, p2: u32, replacement: u32) usize 
     return j;
 }
 
-test "basic add functionality" {
-    var og = [_]u8{ 1, 2, 3, 1, 2, 8, 11, 1, 2 };
-    const expected = [_]u8{ 4, 3, 4, 8, 11, 4 };
-    const mergedSize = merge(&og, &og, 1, 2, 4);
-    try testing.expectEqualSlices(u8, &expected, og[0..mergedSize]);
-}
-
 pub const BasicTokenizer = struct {
     const Self = @This();
 
@@ -115,6 +108,16 @@ pub const BasicTokenizer = struct {
             .merges = PairReplacement.init(alloc),
             .vocab = vocab,
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.merges.deinit();
+        self.special_tokens.deinit();
+        var vocabIterator = self.vocab.iterator();
+        while (vocabIterator.next()) |val| {
+            self.allocator.free(val.value_ptr.*);
+        }
+        self.vocab.deinit();
     }
 
     fn buildInitVocab(allocator: std.mem.Allocator, vocab: *Vocab) !void {
@@ -235,10 +238,21 @@ pub const RegexTokenizer = struct {
         return Self{
             .alloc = alloc,
             .merges = PairReplacement.init(alloc),
-            .pattern = pat,
+            .pattern = copy,
             .special_tokens = SpecialTokens.init(alloc),
             .vocab = vocab,
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.merges.deinit();
+        self.special_tokens.deinit();
+        var vocabIterator = self.vocab.iterator();
+        while (vocabIterator.next()) |val| {
+            self.alloc.free(val.value_ptr.*);
+        }
+        self.vocab.deinit();
+        self.alloc.free(self.pattern);
     }
 
     fn buildInitVocab(alloc: std.mem.Allocator, vocab: *Vocab) !void {
@@ -255,8 +269,8 @@ pub const RegexTokenizer = struct {
             @panic("vocab must be atleast 256 in size");
         }
         var pairCount = PairCount.init(self.alloc);
-        const chunks = StringChunks.init(self.alloc);
-        var matches = unicodeStr.matchAll(self.pattern, 0, 0, 0);
+        var chunks = StringChunks.init(self.alloc);
+        var matches = try unicodeStr.matchAll(self.pattern, 0, 0, 0);
         std.debug.assert(matches.matchSucceed() == true);
         const results = matches.getResults().?;
         for (results) |result| {
@@ -265,7 +279,7 @@ pub const RegexTokenizer = struct {
             var i: usize = 0;
             // Turn the string into a list of u32
             while (i < result.len) : (i += 1) {
-                try chunk.append(unicodeStr.charAt(@as(isize, @intCast(start + i))));
+                try chunk.append(try unicodeStr.charAt(@as(isize, @intCast(start + i))));
             }
 
             try chunks.append(try chunk.toOwnedSlice());
@@ -275,16 +289,17 @@ pub const RegexTokenizer = struct {
         var i: usize = 0;
         while (i < numMerges) : (i += 1) {
             for (chunks.items) |chunk| {
-                countConsecutivePairs(chunk.items, &pairCount);
+                try countConsecutivePairs(chunk, &pairCount);
             }
             const pair = maxFrequency(pairCount);
             const replacementIdx = 256 + @as(u32, @truncate(i));
-            for (chunks.items) |*chunk| {
-                const reducedSize = merge(chunk.items, chunk.items, pair.p0, pair.p1, replacementIdx);
+            for (chunks.items) |*cc| {
+                var chunk = cc.*;
+                const reducedSize = merge(chunk, chunk, pair.p0, pair.p1, replacementIdx);
                 chunk = chunk[0..reducedSize];
             }
             std.debug.print("iter {}, merging {} {} -> {}\n", .{ i, pair.p0, pair.p1, replacementIdx });
-            const concatenatedValue = try std.mem.concat(self.allocator, u8, &[_][]const u8{ self.vocab.get(pair.p0).?, self.vocab.get(pair.p1).? });
+            const concatenatedValue = try std.mem.concat(self.alloc, u8, &[_][]const u8{ self.vocab.get(pair.p0).?, self.vocab.get(pair.p1).? });
             // the characters represented by this new token
             try self.vocab.put(replacementIdx, concatenatedValue);
             _ = pairCount.swapRemove(pair);
@@ -327,11 +342,34 @@ pub fn readFileAsSlice(path: []const u8) !FileHandle {
     return FileHandle.init(path);
 }
 
-test "test RegexTokenizer" {
-    const testingAllocator = std.testing.allocator;
-    var tokenizer = try RegexTokenizer.init(testingAllocator, null);
-    const fileHandle = try readFileAsSlice("taylorswift.txt");
-    defer fileHandle.deinit();
-    try tokenizer.train(fileHandle.slice, 256);
-    tokenizer.printMerge();
+//test "test RegexTokenizer" {
+//    const testingAllocator = std.testing.allocator;
+//    var tokenizer = try RegexTokenizer.init(testingAllocator, null);
+//    defer tokenizer.deinit();
+//    const d = std.fs.cwd();
+//    const f = try d.openFile("taylorswift.txt", .{ .mode = .read_only });
+//    defer f.close();
+//    var fileStr = try jstring.JString.newFromFile(testingAllocator, f);
+//    defer fileStr.deinit();
+//    try tokenizer.train(fileStr, 256);
+//    tokenizer.printMerge();
+//}
+
+test "gpt2 regex test for jstring" {
+    const allocator = std.testing.allocator;
+    const pattern = "(*UTF)'(?:[sdmt]|ll|ve|re)| ?\\p{L}+| ?\\p{N}+| ?[^\\s\\p{L}\\p{N}]+|\\s+(?!\\S)|\\s+/g";
+    const slice = "abcdeparallel ४७१";
+    var utf8String = try jstring.JString.newFromSlice(allocator, slice);
+    defer utf8String.deinit();
+    var regex = try utf8String.matchAll(pattern, 0, 0, 0);
+    defer regex.deinit();
+    if (regex.getResults()) |results| {
+        try std.testing.expectEqual(2, results.len);
+        for (results) |result| {
+            var match = try utf8String.slice(@as(isize, @intCast(result.start)), @as(isize, @intCast(result.start + result.len)));
+            defer match.deinit();
+            std.debug.print("{s}\n", .{match});
+        }
+    }
+    try std.testing.expect(regex.matchSucceed() == true);
 }

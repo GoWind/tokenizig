@@ -4,6 +4,26 @@ const jstring = @import("jstring");
 const os = std.os;
 const unicode = std.unicode;
 pub fn main() !void {
+    std.debug.print("running the tokenizer", .{});
+    try regexTokenizer();
+}
+
+pub fn regexTokenizer() !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var tokenizer = try tokenizers.RegexTokenizer.init(allocator, null);
+    defer tokenizer.deinit();
+    const d = std.fs.cwd();
+    const f = try d.openFile("taylorswift.txt", .{ .mode = .read_only });
+    defer f.close();
+    var fileStr = try jstring.JString.newFromFile(allocator, f);
+    defer fileStr.deinit();
+    try tokenizer.train(fileStr, 512);
+    tokenizer.printMerge();
+}
+
+pub fn basicTokenizer() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -25,5 +45,4 @@ pub fn main() !void {
     std.debug.print("\n\n Merge \n\n", .{});
     tokenizer.printMerge();
     std.debug.print("\n\n Vocab \n\n", .{});
-    // tokenizer.printVocab();
 }
