@@ -322,7 +322,20 @@ pub const RegexTokenizer = struct {
         defer file.close();
         var writer = file.writer();
         try writer.print("minbpe v1\n", .{});
-        try writer.print("{s}\n", .{self.pattern});
+        var formattedPattern = std.ArrayList(u8).init(self.alloc);
+        defer formattedPattern.deinit();
+        for (self.pattern) |c| {
+            if (c == '\r') {
+                try formattedPattern.append('\\');
+                try formattedPattern.append('r');
+            } else if (c == '\n') {
+                try formattedPattern.append('\\');
+                try formattedPattern.append('n');
+            } else {
+                try formattedPattern.append(c);
+            }
+        }
+        try writer.print("{s}\n", .{formattedPattern.items});
         try writer.print("{d}\n", .{self.special_tokens.count()});
         var specialtokeniterator = self.special_tokens.iterator();
         while (specialtokeniterator.next()) |entry| {
@@ -331,9 +344,14 @@ pub const RegexTokenizer = struct {
         var iterator = self.merges.iterator();
         while (iterator.next()) |iter| {
             const key = iter.key_ptr.*;
-            const value = iter.value_ptr.*;
-            try writer.print("({d},{d}) {d}\n", .{ key.p0, key.p1, value });
+            try writer.print("{d} {d}\n", .{ key.p0, key.p1 });
         }
+    }
+
+    pub fn load(self: Self, path: []const u8) !Self {
+        var f = std.os.cwd().openFile(path, .{ .mode = .read_only });
+        defer f.close();
+        var fileStr = try jstring.JString.newFromFile(self.alloc, f);
     }
 };
 

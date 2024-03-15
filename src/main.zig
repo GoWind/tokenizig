@@ -4,7 +4,6 @@ const jstring = @import("jstring");
 const os = std.os;
 const unicode = std.unicode;
 pub fn main() !void {
-    std.debug.print("running the tokenizer", .{});
     try regexTokenizer();
 }
 
