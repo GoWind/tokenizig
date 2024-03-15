@@ -299,13 +299,12 @@ pub const RegexTokenizer = struct {
                 chunk = chunk[0..reducedSize];
             }
             std.debug.print("iter {}, merging {} {} -> {}\n", .{ i, pair.p0, pair.p1, replacementIdx });
+            try self.merges.put(pair, replacementIdx);
             const concatenatedValue = try std.mem.concat(self.alloc, u8, &[_][]const u8{ self.vocab.get(pair.p0).?, self.vocab.get(pair.p1).? });
             // the characters represented by this new token
             try self.vocab.put(replacementIdx, concatenatedValue);
             _ = pairCount.swapRemove(pair);
         }
-
-        //TODO: How do I dealloc the chunks?
     }
 
     pub fn printMerge(self: Self) void {
@@ -316,44 +315,27 @@ pub const RegexTokenizer = struct {
             std.debug.print("({d}, {d}) -> {d}\n", .{ key.p0, key.p1, value });
         }
     }
-};
 
-pub const FileHandle = struct {
-    fd: i32,
-    slice: []u8,
-    const Self = @This();
-    pub fn init(path: []const u8) !Self {
-        const fd = try std.os.open(path, .{ .ACCMODE = .RDONLY }, 0);
-        const stat = try std.os.fstat(fd);
-        const mapping = try std.os.mmap(null, @as(u64, @intCast(stat.size)), std.os.PROT.READ, .{ .TYPE = .PRIVATE }, fd, 0);
-        return Self{
-            .fd = fd,
-            .slice = mapping,
-        };
+    pub fn save(self: Self) !void {
+        const dir = std.fs.cwd();
+        const file = try dir.createFile("regextokenizer.model", .{ .truncate = true });
+        defer file.close();
+        var writer = file.writer();
+        try writer.print("minbpe v1\n", .{});
+        try writer.print("{s}\n", .{self.pattern});
+        try writer.print("{d}\n", .{self.special_tokens.count()});
+        var specialtokeniterator = self.special_tokens.iterator();
+        while (specialtokeniterator.next()) |entry| {
+            try writer.print("{s} {d}\n", .{ entry.key_ptr.*, entry.value_ptr.* });
+        }
+        var iterator = self.merges.iterator();
+        while (iterator.next()) |iter| {
+            const key = iter.key_ptr.*;
+            const value = iter.value_ptr.*;
+            try writer.print("({d},{d}) {d}\n", .{ key.p0, key.p1, value });
+        }
     }
-
-    pub fn deinit(self: *Self) void {
-        std.os.munmap(self.slice);
-        std.os.close(self.fd);
-    }
 };
-
-pub fn readFileAsSlice(path: []const u8) !FileHandle {
-    return FileHandle.init(path);
-}
-
-//test "test RegexTokenizer" {
-//    const testingAllocator = std.testing.allocator;
-//    var tokenizer = try RegexTokenizer.init(testingAllocator, null);
-//    defer tokenizer.deinit();
-//    const d = std.fs.cwd();
-//    const f = try d.openFile("taylorswift.txt", .{ .mode = .read_only });
-//    defer f.close();
-//    var fileStr = try jstring.JString.newFromFile(testingAllocator, f);
-//    defer fileStr.deinit();
-//    try tokenizer.train(fileStr, 256);
-//    tokenizer.printMerge();
-//}
 
 test "gpt2 regex test for jstring" {
     const allocator = std.testing.allocator;

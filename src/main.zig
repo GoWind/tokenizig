@@ -21,6 +21,7 @@ pub fn regexTokenizer() !void {
     defer fileStr.deinit();
     try tokenizer.train(fileStr, 512);
     tokenizer.printMerge();
+    try tokenizer.save();
 }
 
 pub fn basicTokenizer() !void {
