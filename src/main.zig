@@ -1,5 +1,5 @@
 const std = @import("std");
-const tokenizers = @import("tokenizers");
+const tokenizers = @import("./root.zig");
 const jstring = @import("jstring");
 const os = std.os;
 const unicode = std.unicode;
@@ -7,7 +7,7 @@ pub fn main() !void {
     try regexTokenizer();
 }
 
-pub fn regexTokenizer() !void {
+pub fn regexTokenizerTrainer() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
@@ -23,6 +23,16 @@ pub fn regexTokenizer() !void {
     try tokenizer.save();
 }
 
+pub fn regexTokenizer() !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var tokenizer = try tokenizers.RegexTokenizer.init(allocator, null);
+    defer tokenizer.deinit();
+    try tokenizer.load("regex.model");
+    tokenizer.printMerge();
+    tokenizer.printVocab();
+}
 pub fn basicTokenizer() !void {
     var arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
     defer arena.deinit();

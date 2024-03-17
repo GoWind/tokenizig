@@ -16,12 +16,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const tokenizers = b.addModule("tokenizers", .{
-        .root_source_file = .{ .path = "src/root.zig" },
-    });
-    tokenizers.addImport("jstring", jstrings.module("jstring"));
-
-    exe.root_module.addImport("tokenizers", tokenizers);
     exe.root_module.addImport("jstring", jstrings.module("jstring"));
     jstring_build.linkPCRE(exe, jstrings);
     b.installArtifact(exe);

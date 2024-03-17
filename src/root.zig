@@ -24,7 +24,7 @@ pub const SpecialTokens = std.StringArrayHashMap(u32);
 
 /// Track the replacement for a given pair of u32 tokens
 pub const PairReplacement = std.AutoArrayHashMap(Pair, u32);
-pub const PairCount = std.ArrayHashMap(Pair, u32, struct {
+pub const PairCounts = std.ArrayHashMap(Pair, u32, struct {
     pub fn eql(_: @This(), a: Pair, b: Pair, _: usize) bool {
         return a.p0 == b.p0 and a.p1 == b.p1;
     }
@@ -34,7 +34,7 @@ pub const PairCount = std.ArrayHashMap(Pair, u32, struct {
 }, false);
 
 /// Return the pair with the highest frequency
-pub fn maxFrequency(p: PairCount) Pair {
+pub fn maxFrequency(p: PairCounts) Pair {
     var count: usize = std.math.minInt(usize);
     var pairPtr: *Pair = undefined;
     var iterator = p.iterator();
@@ -48,7 +48,7 @@ pub fn maxFrequency(p: PairCount) Pair {
 }
 
 /// Return the pair with the lowest frequency
-pub fn minFrequency(p: PairCount) Pair {
+pub fn minFrequency(p: PairCounts) Pair {
     var count = std.math.maxInt(usize);
     var pairPtr: *Pair = undefined;
     var iterator = p.iterator();
@@ -62,7 +62,7 @@ pub fn minFrequency(p: PairCount) Pair {
 }
 
 /// Count the frequency of each pair of consecutive tokens
-pub fn countConsecutivePairs(ids: []const u32, counts: *PairCount) !void {
+pub fn countConsecutivePairs(ids: []const u32, counts: *PairCounts) !void {
     var i: usize = 0;
     while (i < ids.len - 1) : (i += 1) {
         const p = Pair{ .p0 = ids[i], .p1 = ids[i + 1] };
@@ -136,11 +136,13 @@ pub const BasicTokenizer = struct {
         // The type of copy depends on vocab size (eg, for a vocab of 32768, it could just be []u16)
         // keeping it []u32 and then optimizing later
         var copy = try self.allocator.alloc(u32, unicodeStr.bytes.len);
+        defer self.allocator.free(copy);
         for (unicodeStr.bytes, 0..) |byte, idx| {
             copy[idx] = byte;
         }
         const numMerges = vocab - 256;
-        var pairCount = PairCount.init(self.allocator);
+        var pairCount = PairCounts.init(self.allocator);
+        defer pairCount.deinit();
         var i: usize = 0;
         while (i < numMerges) : (i += 1) {
             try countConsecutivePairs(copy, &pairCount);
@@ -164,7 +166,7 @@ pub const BasicTokenizer = struct {
     pub fn encode(self: Self, text: unicode.Utf8View) ![]u32 {
         const copy = try self.allocator.alloc(u32, text.bytes.len);
         @memcpy(copy, text.bytes);
-        const pairCount = PairCount.init(self.allocator);
+        const pairCount = PairCounts.init(self.allocator);
         while (copy.len >= 2) {
             countConsecutivePairs(copy, &pairCount);
             // of all pairs (p0, p1) in pairCount, we try to find
@@ -268,11 +270,12 @@ pub const RegexTokenizer = struct {
         if (vocab < 256) {
             @panic("vocab must be atleast 256 in size");
         }
-        var pairCount = PairCount.init(self.alloc);
+        var pairCount = PairCounts.init(self.alloc);
         var chunks = StringChunks.init(self.alloc);
         var matches = try unicodeStr.matchAll(self.pattern, 0, 0, 0);
         std.debug.assert(matches.matchSucceed() == true);
         const results = matches.getResults().?;
+        std.debug.print("number of matches is {}\n", .{results.len});
         for (results) |result| {
             var chunk = std.ArrayList(u32).init(self.alloc);
             const start = result.start;
@@ -348,10 +351,84 @@ pub const RegexTokenizer = struct {
         }
     }
 
-    pub fn load(self: Self, path: []const u8) !Self {
-        var f = std.os.cwd().openFile(path, .{ .mode = .read_only });
-        defer f.close();
-        var fileStr = try jstring.JString.newFromFile(self.alloc, f);
+    fn buildVocab(self: *Self) !void {
+        var replacements = self.merges.iterator();
+        while (replacements.next()) |replacement| {
+            const pair = replacement.key_ptr.*;
+            const idx = replacement.value_ptr.*;
+            const value = try std.mem.concat(self.alloc, u8, &[_][]const u8{ self.vocab.get(pair.p0).?, self.vocab.get(pair.p1).? });
+            try self.vocab.put(idx, value);
+        }
+
+        var specialTokeIter = self.special_tokens.iterator();
+        while (specialTokeIter.next()) |entry| {
+            const specialToken = entry.key_ptr.*;
+            const idx = entry.value_ptr.*;
+            try self.vocab.put(idx, specialToken);
+        }
+    }
+
+    pub fn encode_chunk(self: Self, alloc: std.mem.Allocator, text_chunk: []u8) ![]u32 {
+        var tokens = std.ArrayList(u32).init(alloc);
+        var pairCounts = PairCounts.init(alloc);
+        for(text_chunk) |c| {
+            try tokens.append(@as(u32, @intCast(c)));
+        }
+        while(tokens.items.len >= 2) {
+            countConsecutivePairs(tokens, &pairCounts);
+            const minPair = minFrequency(pairCounts);
+            if(self.merges.get(minPair)) |replacement| {
+                const afterCopy = merge(tokens.items, tokens.items, minPair.p0, minPair.p1, replacement);
+                tokens.items = tokens.items[0..afterCopy];
+            } else {
+                break;
+            }
+        }
+
+        return tokens.toOwnedSlice();
+            
+    }
+
+    pub fn 
+    
+
+    pub fn load(self: *Self, path: []const u8) !void {
+        const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+        defer file.close();
+        var reader = file.reader();
+        const header = try reader.readUntilDelimiterAlloc(self.alloc, '\n', 500);
+        defer self.alloc.free(header);
+        if (!std.mem.eql(u8, header, "minbpe v1")) {
+            @panic("invalid header");
+        }
+        self.pattern = try reader.readUntilDelimiterAlloc(self.alloc, '\n', 500);
+        const numSpecialTokensStr = try reader.readUntilDelimiterAlloc(self.alloc, '\n', 500);
+        defer self.alloc.free(numSpecialTokensStr);
+        const numSpecialTokens = try std.fmt.parseInt(usize, numSpecialTokensStr, 10);
+        var i: usize = 0;
+        while (i < numSpecialTokens) : (i += 1) {
+            const specialTokenLine = try reader.readUntilDelimiterAlloc(self.alloc, '\n', 500);
+            defer self.alloc.free(specialTokenLine);
+            var specialToken = std.mem.splitScalar(u8, specialTokenLine, ' ');
+            try self.special_tokens.put(specialToken.first(), try std.fmt.parseInt(u32, specialToken.next().?, 0));
+        }
+        var idx: u32 = 256;
+        while (try reader.readUntilDelimiterOrEofAlloc(self.alloc, '\n', 500)) |line| {
+            var pair = std.mem.splitScalar(u8, line, ' ');
+            try self.merges.put(Pair{ .p0 = try std.fmt.parseInt(u32, pair.next().?, 0), .p1 = try std.fmt.parseInt(u32, pair.next().?, 0) }, idx);
+            idx += 1;
+            self.alloc.free(line);
+        }
+        try self.buildVocab();
+    }
+
+    pub fn printVocab(self: *Self) void {
+        var iterator = self.vocab.iterator();
+        while (iterator.next()) |iter| {
+            const key = iter.key_ptr.*;
+            const value = iter.value_ptr.*;
+            std.debug.print("({d}) -> {s}\n", .{ key, value });
+        }
     }
 };
 
@@ -372,4 +449,32 @@ test "gpt2 regex test for jstring" {
         }
     }
     try std.testing.expect(regex.matchSucceed() == true);
+}
+
+test "basic tokenizer test" {
+    const allocator = std.testing.allocator;
+    var managedString = try jstring.JStringUnmanaged.newFromSlice(allocator, "hello,hello,world");
+    defer managedString.deinit(allocator);
+    const results = try managedString.split(allocator, ",", -1);
+
+    for (results) |r| {
+        std.debug.print("result is {s}\n", .{r});
+    }
+    std.debug.print("number of splits we have is {}\n", .{results.len});
+    const fd = try std.os.open("taylorswift.txt", .{ .ACCMODE = .RDONLY }, 0);
+    defer std.os.close(fd);
+    const stat = try std.os.fstat(fd);
+    const mapping = try std.os.mmap(null, @as(u64, @intCast(stat.size)), std.os.PROT.READ, .{ .TYPE = .PRIVATE }, fd, 0);
+    defer std.os.munmap(mapping);
+
+    var tokenizer = try BasicTokenizer.init(allocator);
+    defer tokenizer.deinit();
+    const textAsUtf8 = try unicode.Utf8View.init(mapping);
+    try tokenizer.train(textAsUtf8, @as(usize, 512));
+    //std.debug.print("\n\n Merge \n\n", .{});
+    //tokenizer.printMerge();
+    // std.debug.print("\n\n Vocab \n\n", .{});
+    for (results) |r| {
+        r.deinit(std.testing.allocator);
+    }
 }
